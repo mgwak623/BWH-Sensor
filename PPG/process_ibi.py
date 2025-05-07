@@ -1,9 +1,11 @@
 import heartpy as hp
 import numpy as np
 import pandas as pd
-from scipy import signal
+from scipy import signal, fftpack
 from scipy.stats import iqr
+from scipy.signal import spectrogram
 import bisect
+import matplotlib.pyplot as plt
 
 def find_closest_index(a, x):
     i = bisect.bisect_left(a, x)
@@ -189,3 +191,71 @@ def get_ibi_max_slope(input_signal, time_start, sample_rate=25):
     df_ibi = df_ibi[df_ibi["rr_list"] < 3000]
 
     return df_ibi
+
+
+def compute_snr(ppg, ifdetrend4snr=1, fs=100, bound_hr=(0.6, 3), low=0.5, high=8, ifplot=0):
+    # snr_win_size: the window length, in minute, to calculate snr
+
+    ppg_filt = butter_bandpass_filter(ppg, low, high, fs=fs, order=3)
+
+    if ifdetrend4snr == 1:
+        sig_filt = signal.detrend(ppg_filt)
+
+    N = len(sig_filt)
+
+    # normalize signal between 0 and 1
+    sig_filt_norm = (sig_filt - np.min(sig_filt)) / (np.max(sig_filt) - np.min(sig_filt))
+
+    mag_fft = fftpack.fft(sig_filt_norm)
+    mag_fft = 2.0 / N * np.abs(mag_fft[:N // 2])
+    bin_fft = np.linspace(0.0, 1.0 // (2.0 / fs), len(sig_filt_norm) // 2)
+
+    low_bound_hr, high_bound_hr = bound_hr[0], bound_hr[1]
+    # low_bound_range, high_bound_range = np.max([0.5, low_bound_hr]), np.min([high_bound_hr, bin_fft[-1]])
+
+    mag_fft_for_peak = mag_fft[(bin_fft > low_bound_hr) & (bin_fft < high_bound_hr)]
+    bin_fft_for_peak = bin_fft[(bin_fft > low_bound_hr) & (bin_fft < high_bound_hr)]
+
+    peak_idx = np.argmax(mag_fft_for_peak)
+
+    f_peak = bin_fft_for_peak[peak_idx]
+
+    harmonics2_peak, harmonics3_peak = 2 * f_peak, 3 * f_peak
+
+    def fre2ind(fre, bin_fft_infun=bin_fft):
+        return np.argmin(np.abs(fre - bin_fft_infun))
+
+    power_sig = np.sum(mag_fft[fre2ind(f_peak - 0.1): fre2ind(f_peak + 0.1)] ** 2) + \
+                np.sum(mag_fft[fre2ind(harmonics2_peak - 0.1): fre2ind(harmonics2_peak + 0.1)] ** 2) + \
+                np.sum(mag_fft[fre2ind(harmonics3_peak - 0.1): fre2ind(harmonics3_peak + 0.1)] ** 2)
+    power_noi = np.sum(mag_fft[: fre2ind(harmonics3_peak + 0.1)] ** 2) - power_sig
+
+    snr = 10 * np.log10(power_sig / power_noi)
+
+    if ifplot:
+        plt.figure(figsize=(5, 3))
+        plt.plot(bin_fft[1:], mag_fft[1:])
+        plt.axvline(f_peak - 0.1, color='r')
+        plt.axvline(f_peak + 0.1, color='r')
+        plt.axvline(harmonics2_peak - 0.1, color='r')
+        plt.axvline(harmonics2_peak + 0.1, color='r')
+        plt.axvline(harmonics3_peak - 0.1, color='r')
+        plt.axvline(harmonics3_peak + 0.1, color='r')
+        plt.title(f'PPG, SNR={round(snr, 2)}')
+        plt.xlim((0, 5))
+        plt.show()
+    return snr
+
+def spectral_entropy(Sxx, eps=1e-12):
+    power_time = np.sum(Sxx, axis=0, keepdims=True)
+    p = Sxx / (power_time + eps)
+    entropy_per_frame = -np.sum(p*np.log2(p + eps), axis=0)
+    return np.mean(entropy_per_frame)
+
+def compute_entropy(seg, threshold=2):
+    nperseg = 512
+    pad_size = nperseg // 2
+    x_padded = np.pad(seg, (pad_size, pad_size), mode="constant")
+    f, time_segments, Sxx = spectrogram(x_padded, fs=100, nperseg=nperseg, noverlap=pad_size)
+    mean_entropy = spectral_entropy(Sxx)
+    return mean_entropy

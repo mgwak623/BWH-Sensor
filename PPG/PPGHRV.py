@@ -1,7 +1,7 @@
 import pandas as pd
 from PPG.process_ppg import filter_ppg
 import numpy as np
-from PPG.process_ibi import peak_det2
+from PPG.process_ibi import peak_det2, compute_snr, compute_entropy
 from PPG.hrv_feature_extraction import get_hrv_features
 from PPG.process_imu import motion_detection
 from PPG.process_ppg import get_hr_fft
@@ -197,5 +197,11 @@ class PPG():
         # If IMU data exists, get motion percentage
         if len(imu_df) > 0:
             ppg_feature_df['ppg_Motion_Percent'] = percent_flag_motion
+
+        # PPG Quality Check Metrics
+        snr = compute_snr(ppg_filtered, fs=sampling_rate)
+        ent = compute_entropy(ppg_filtered)
+        ppg_feature_df.insert(0, 'quality_entropy', ent)
+        ppg_feature_df.insert(0, 'quality_snr', snr)
 
         return ppg_feature_df
